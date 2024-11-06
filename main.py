@@ -21,7 +21,8 @@ async def ask_question(question):
 # Fungsi login dengan nomor telepon
 async def login_with_phone_number():
     phone_number = await ask_question("Nomor telepon Anda (misalnya, +1234567890): ")
-    client = TelegramClient(StringSession(), api_id, api_hash)
+    session_name = f"sessions/{phone_number}"
+    client = Client(name=session_name, api_id=api_id, api_hash=api_hash)
 
     await client.connect()
     if not await client.is_user_authorized():
