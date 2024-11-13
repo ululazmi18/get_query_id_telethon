@@ -1,149 +1,202 @@
 import os
+import sys
 import json
-import asyncio
-from telethon import TelegramClient, functions  # Pastikan functions diimpor
-from telethon.sessions import StringSession
-from telethon.errors import SessionPasswordNeededError
-from dotenv import load_dotenv
+import urllib.parse
+import asyncio  # Tambahkan import asyncio
+from telethon import TelegramClient, functions
 
-load_dotenv()  # Mengimpor dotenv
+# Pastikan folder 'sessions' ada
+if not os.path.exists("sessions"):
+    os.makedirs("sessions")
 
-# Konfigurasi API ID dan API Hash
-api_id = int(os.getenv("API_ID"))
-api_hash = os.getenv("API_HASH")
-
-accounts = {}
-
-# Fungsi untuk menanyakan input pengguna
-async def ask_question(question):
-    return input(question)
-
-# Fungsi login dengan nomor telepon
-async def login_with_phone_number():
-    phone_number = await ask_question("Nomor telepon Anda (misalnya, +1234567890): ")
-    session_name = f"sessions/{phone_number}"
-    client = Client(name=session_name, api_id=api_id, api_hash=api_hash)
-
-    await client.connect()
-    if not await client.is_user_authorized():
-        try:
-            await client.send_code_request(phone_number)
-            code = await ask_question("Kode yang Anda terima: ")
-            await client.sign_in(phone_number, code)
-        except SessionPasswordNeededError:
-            password = await ask_question("Kata sandi Anda: ")
-            await client.sign_in(password=password)
-
-    print('Login berhasil')
-    session_string = client.session.save()
-    session_folder = 'sessions'
-    os.makedirs(session_folder, exist_ok=True)
-    session_file = os.path.join(session_folder, f"{phone_number.replace('+', '')}.session")
+CONFIG_FILE = "config.json"
+DEFAULT_CONFIG = {
+    "api_id": 0,
+    "api_hash": "your_api_hash_here"
+}
+if not os.path.exists(CONFIG_FILE):
+    with open(CONFIG_FILE, "w") as file:
+        json.dump(DEFAULT_CONFIG, file, indent=4)
+        print("Harap isi api_id dan api_hash Anda di dalam config.json, lalu jalankan ulang program.")
+        sys.exit()
+with open(CONFIG_FILE, "r") as file:
+    config = json.load(file)
+if config["api_id"] == 0 or config["api_hash"] == "your_api_hash_here":
+    print("Harap isi api_id dan api_hash Anda di dalam config.json, lalu jalankan ulang program.")
+    sys.exit()
     
-    with open(session_file, "w") as f:
-        f.write(session_string)
-    accounts[phone_number] = client
-    print(f"Sesi disimpan di {session_file}")
-
-# Fungsi login dengan file sesi
-async def login_with_session_file():
-    session_folder = 'sessions'
-    if not os.path.exists(session_folder):
-        print("Tidak ada file sesi yang ditemukan.")
+def buat_sesi_baru():
+    api_id, api_hash = config["api_id"], config["api_hash"]
+    phone_number = input("Masukkan nomor telepon: ")
+    session_file = os.path.join("sessions", f"{phone_number}.session")
+    if os.path.exists(session_file):
+        print(f"Sesi untuk nomor {phone_number} sudah ada.")
         return
 
-    session_files = [f for f in os.listdir(session_folder) if f.endswith('.session')]
-    if not session_files:
-        print("Tidak ada file sesi yang ditemukan.")
-        return
+    # Membuat klien baru dengan nama file sesuai nomor telepon
+    app = TelegramClient(
+        session=session_file,
+        api_id=api_id,
+        api_hash=api_hash,
+        device_model='Ulul Azmi',
+        app_version='telethon'
+    )
+    app.start(phone_number)
+    print(f"Sesi untuk nomor {phone_number} berhasil dibuat dan disimpan di folder 'sessions/'.")
+    app.disconnect()
 
-    for session_file in session_files:
-        session_path = os.path.join(session_folder, session_file)
-        with open(session_path, "r") as f:
-            session_string = f.read().strip()
-        client = TelegramClient(StringSession(session_string), api_id, api_hash)
-        try:
-            await client.connect()
-            accounts[session_file.replace('.session', '')] = client
-            print(f"Berhasil login dengan sesi dari {session_file}")
-        except Exception as e:
-            print(f"Gagal login dengan {session_file}: {e}")
+BOT_FILE = "bot.json"
+# Fungsi untuk memuat atau membuat file bot.json
+def load_bot_data():
+    if not os.path.exists(BOT_FILE):
+        with open(BOT_FILE, 'w') as file:
+            json.dump({}, file)
+    with open(BOT_FILE, 'r') as file:
+        return json.load(file)
 
-# Fungsi untuk meminta WebView
-async def request_webview_for_client(client, phone_number, bot_peer, url):
-    try:
-        result = await client(functions.messages.RequestWebViewRequest(
-            peer=bot_peer,
-            bot=bot_peer,
-            from_bot_menu=False,
-            url=url,
-            platform='android'
-        ))
-        web_app_data = result.url.split('#')[1].split('&')[0].split('=')[1]
-        with open('cek.txt', 'w') as f:
-            json.dump(result.to_dict(), f, indent=2)
-        print(f"WebView berhasil diminta untuk {phone_number}")
-        return {"phoneNumber": phone_number, "webAppData": web_app_data}
-    except Exception as e:
-        print(f"Error saat meminta WebView untuk {phone_number}: {e}")
-        return None
+# Fungsi untuk menyimpan data ke file bot.json
+def save_bot_data(data):
+    with open(BOT_FILE, 'w') as file:
+        json.dump(data, file, indent=2)
 
-# Fungsi untuk meminta WebView untuk semua klien dan menyimpan hasilnya per bot
-async def request_webview_for_all_clients():
-    if not accounts:
-        print("Tidak ada akun yang masuk.")
-        return
+# Fungsi untuk menampilkan daftar bot yang tersedia
+def select_bot():
+    bot_data = load_bot_data()
+    bot_usernames = list(bot_data.keys())
 
-    bot_peer = await ask_question("Silakan masukkan bot peer (misalnya, @YourBot): ")
-    url = await ask_question("Silakan masukkan URL refferal: ")
-    results = []
+    print("Pilih Bot:")
+    print("0. Kembali")
+    print("1. Input bot untuk sesi ini")
+    print("2. Tambah bot baru")
 
-    # Membuat folder untuk hasil WebView
-    os.makedirs("webview_results", exist_ok=True)
+    for index, bot_username in enumerate(bot_usernames, start=3):
+        print(f"{index}. {bot_username}")
 
-    # Meminta WebView untuk setiap akun yang masuk
-    for phone_number, client in accounts.items():
-        result = await request_webview_for_client(client, phone_number, bot_peer, url)
-        if result:
-            results.append(result)
-            sanitized_phone = phone_number.replace('+', '')
-            with open(f"webview_results/{sanitized_phone}.txt", "a") as f:
-                f.write(f"Bot: {bot_peer} | WebAppData: {result['webAppData']}\n")
-    
-    # Menyimpan semua hasil dalam satu file khusus untuk bot
-    bot_file_name = f"{bot_peer.replace('@', '')}.txt"
-    query_folder = 'query'
-    os.makedirs(query_folder, exist_ok=True)
-    bot_file_path = os.path.join(query_folder, bot_file_name)
-
-    all_results = "\n".join([f"{r['webAppData']}" for r in results])
-    with open(bot_file_path, "w") as f:
-        f.write(all_results)
-
-    print(f"Hasil untuk {bot_peer} disimpan di {bot_file_path}")
-
-# Fungsi utama untuk menangani input pengguna
-async def main():
-    print("Selamat datang di Utilitas Bot Telegram!")
-    
-    while True:
-        print("1. Login dengan nomor telepon")
-        print("2. Login dengan file sesi")
-        print("3. Memintan Query ID ke semua klien")
-        print("4. Keluar")
-
-        choice = await ask_question("Silakan pilih opsi: ")
-
-        if choice == "1":
-            await login_with_phone_number()
-        elif choice == "2":
-            await login_with_session_file()
-        elif choice == "3":
-            await request_webview_for_all_clients()
-        elif choice == "4":
-            break
+    choice = input("Masukkan pilihan Anda: ")
+    if choice == '0':
+        print("Kembali ke menu sebelumnya.")
+        return 0
+    elif choice == '1':
+        bot_username = input("Silakan masukkan bot username (misalnya, @YourBot): ")
+        referral_url = input("Silakan masukkan URL Refferal: ")
+        print(f"Bot {bot_username} dengan URL: {referral_url} telah diinput untuk sesi ini.")
+        return {'bot_username': bot_username, 'referral_url': referral_url}
+    elif choice == '2':
+        bot_username = input("Silakan masukkan bot username (misalnya, @YourBot): ")
+        referral_url = input("Silakan masukkan URL Refferal: ")
+        bot_data[bot_username] = referral_url
+        save_bot_data(bot_data)
+        print(f"Bot {bot_username} telah disimpan dengan URL: {referral_url}")
+        return {'bot_username': bot_username, 'referral_url': referral_url}
+    else:
+        index = int(choice) - 3
+        if 0 <= index < len(bot_usernames):
+            bot_username = bot_usernames[index]
+            referral_url = bot_data[bot_username]
+            print(f"Menggunakan bot: {bot_username} dengan URL: {referral_url}")
+            return {'bot_username': bot_username, 'referral_url': referral_url}
         else:
             print("Pilihan tidak valid.")
+            return None
 
-# Menjalankan program
-asyncio.run(main())
+async def minta_query_id_ke_semua_klien():
+    
+    session_files = [f for f in os.listdir("sessions") if f.endswith(".session")]
+    if not session_files:
+        print("Tidak ada sesi yang ditemukan di folder 'sessions'.")
+        return
+
+    bot_selection = select_bot()
+    if bot_selection == 0:
+        return
+    if not bot_selection:
+        return
+    api_id, api_hash = config["api_id"], config["api_hash"]
+    bot_username = bot_selection['bot_username']
+    referral_url = bot_selection['referral_url']
+    
+    user = []
+    query_id = []
+
+    for session_file in session_files:
+        session_name = session_file.replace(".session", "")
+        
+        session_file = os.path.join("sessions", f"{session_file}")
+
+        app = TelegramClient(
+            session_file,
+            api_id=api_id,
+            api_hash=api_hash,
+            device_model='Ulul Azmi',
+            app_version='telethon'
+        )
+        async with app:
+            attempt = 0
+            while attempt < 3:
+                try:
+                    bot_peer = bot_username
+                    start_param = referral_url.split("startapp=")[1]
+                    result = await app(functions.messages.RequestWebViewRequest(
+                        peer=bot_peer,
+                        bot=bot_peer,
+                        platform="android",
+                        url=referral_url,
+                        from_bot_menu=False,
+                        start_param=start_param,
+                    ))
+                    result1 = await app(functions.messages.RequestWebViewRequest(
+                        peer=bot_peer,
+                        bot=bot_peer,
+                        platform="android",
+                        url=result.url,
+                        from_bot_menu=False,
+                        start_param=start_param
+                    ))
+                    result2 = await app(functions.messages.RequestWebViewRequest(
+                        peer=bot_peer,
+                        bot=bot_peer,
+                        platform="android",
+                        url=result1.url,
+                        from_bot_menu=False,
+                        start_param=start_param
+                    ))
+                    decoded_once = urllib.parse.unquote(result1.url)
+                    extracted_user = decoded_once.split("tgWebAppData=")[1].split("&tgWebAppVersion=")[0]
+                    user.append(extracted_user)
+                    extracted_query_id = decoded_once.split("tgWebAppData=")[-1].split("&tgWebAppVersion=")[0]
+                    query_id.append(extracted_query_id)
+                    
+                    print(f"\x1b[32mGET Query ID\x1b[0m : {session_name}")
+                    attempt = 3
+                except Exception as e:
+                    attempt += 1
+                    print(f"Gagal membuka WebView untuk {session_name}: {e}")
+        
+    with open("user.txt", "w") as data_file:
+        data_file.writelines("\n".join(user))
+    with open("query_id.txt", "w") as query_id_file:
+        query_id_file.writelines("\n".join(query_id))
+    
+def tampilkan_menu():
+    print("\n--- Menu ---")
+    print("1. Buat sesi baru")
+    print("2. Minta query ID ke semua klien")
+    print("3. Exit")
+
+async def main():
+    while True:
+        tampilkan_menu()
+        pilihan = input("Pilih menu: ")
+
+        if pilihan == "1":
+            buat_sesi_baru()
+        elif pilihan == "2":
+            await minta_query_id_ke_semua_klien()  # Tambahkan await
+        elif pilihan == "3":
+            print("Keluar dari program.")
+            sys.exit()
+        else:
+            print("Pilihan tidak valid. Silakan coba lagi.")
+
+if __name__ == "__main__":
+    asyncio.run(main())  # Jalankan main dengan asyncio
